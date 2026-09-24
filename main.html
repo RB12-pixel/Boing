@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Gyro Physics - Infinite & Skins</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      background: #1e1e2e;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      color: white;
+      font-family: sans-serif;
+    }
+    #ui {
+      position: absolute;
+      top: 12px;
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      z-index: 10;
+    }
+    #level-text {
+      font-size: 20px;
+      font-weight: bold;
+      color: #89b4fa;
+    }
+    .btn-ui {
+      background: #313244;
+      border: 1px solid #89b4fa;
+      color: #cdd6f4;
+      padding: 6px 12px;
+      border-radius: 8px;
+      font-weight: bold;
+      cursor: pointer;
+    }
+    canvas {
+      border: 3px solid #89b4fa;
+      border-radius: 16px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    }
+    .modal {
+      display: none;
+      position: absolute;
+      background: rgba(30, 30, 46, 0.95);
+      border: 2px solid #a6e3a1;
+      padding: 24px;
+      border-radius: 16px;
+      text-align: center;
+      z-index: 20;
+      max-width: 80%;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+    }
+    h2 { margin: 0 0 10px 0; color: #a6e3a1; }
+    button.action-btn {
+      background: #a6e3a1;
+      border: none;
+      padding: 10px 20px;
+      color: #11111b;
+      font-weight: bold;
+      border-radius: 8px;
+      font-size: 16px;
+      cursor: pointer;
+      margin-top: 10px;
+    }
+    #skin-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      justify-content: center;
+      margin: 15px 0;
+    }
+    .skin-circle {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      border: 2px solid #ffffff;
+      cursor: pointer;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+    }
+    .skin-locked {
+      background: #45475a !important;
+      border: 2px dashed #6c7086;
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+  </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
+</head>
+<body>
+
+  <div id="ui">
+    <div id="level-text">Livello 1</div>
+    <button class="btn-ui" id="skins-btn">🎨 Skin</button>
+  </div>
+
+  <!-- Modal Vittoria -->
+  <div id="win-modal" class="modal">
+    <h2 id="win-title">Livello Completato! 🎉</h2>
+    <p id="win-desc">Ottimo controllo del giroscopio!</p>
+    <button class="action-btn" id="next-btn">Prossimo Livello</button>
+  </div>
+
+  <!-- Modal Selezione Skin -->
+  <div id="skin-modal" class="modal">
+    <h2 style="color:#89b4fa">Skins Sbloccate</h2>
+    <p style="font-size: 13px;">Sblocchi una nuova skin ogni 30 livelli!</p>
+    <div id="skin-list"></div>
+    <button class="action-btn" style="background:#89b4fa" id="close-skin-btn">Chiudi</button>
+  </div>
+
+  <script>
+    const { Engine, Render, Runner, Bodies, Composite, Events, Vector, Body } = Matter;
+
+    const engine = Engine.create();
+    const w = Math.min(window.innerWidth - 24, 768);
+    const h = Math.min(window.innerHeight - 90, 1024);
+
+    const render = Render.create({
+      element: document.body,
+      engine: engine,
+      options: {
+        width: w,
+        height: h,
+        wireframes: false,
+        background: '#181825'
+      }
+    });
+
+    Render.run(render);
+    const runner = Runner.create();
+    Runner.run(runner, engine);
+
+    let currentLevel = 0;
+    let highestLevel = 0;
+    let ball, goal;
+    let movingObstacles = [];
+    let isLevelComplete = false;
+
+    // Lista Skin (Colori)
+    const SKINS = [
+      { name: "Rosa Standard", color: "#f38ba8" },
+      { name: "Blu Neon", color: "#89b4fa" },
+      { name: "Verde Smeraldo", color: "#a6e3a1" },
+      { name: "Giallo Solare", color: "#f9e2af" },
+      { name: "Viola Elettrico", color: "#cba6f7" },
+      { name: "Arancione Fuoco", color: "#fab387" },
+      { name: "Rosso Rubino", color: "#eb6f92" },
+      { name: "Ciano Acquamarina", color: "#9ccfd8" },
+      { name: "Bianco Puro", color: "#ffffff" }
+    ];
+
+    let selectedSkinColor = SKINS[0].color;
+
+    const wallOpt = { isStatic: true, render: { fillStyle: '#89b4fa' } };
+
+    // Generatore Procedurale per Livelli Infiniti
+    function generateLevelData(lvlIdx) {
+      const ballStart = { x: w * 0.15, y: h * 0.08 };
+      const goalPos = { x: w * 0.85, y: h * 0.92 };
+      const obstacles = [];
+
+      const numRows = Math.min(12, 2 + Math.floor(lvlIdx / 3));
+      const gapSize = Math.max(42, w * 0.35 - (lvlIdx * 1.5));
+      const rowSpacing = (h * 0.75) / (numRows + 1);
+
+      for (let i = 0; i < numRows; i++) {
+        const y = h * 0.15 + rowSpacing * (i + 1);
+        const isMoving = lvlIdx >= 5 && (i % 2 === 1);
+        const gapPosType = (i + lvlIdx) % 3;
+        
+        if (gapPosType === 0) {
+          const obsW = w - gapSize;
+          obstacles.push({ x: w - obsW / 2, y, w: obsW, h: 14, isMoving });
+        } else if (gapPosType === 1) {
+          const obsW = w - gapSize;
+          obstacles.push({ x: obsW / 2, y, w: obsW, h: 14, isMoving });
+        } else {
+          const sideW = (w - gapSize) / 2;
+          obstacles.push({ x: sideW / 2, y, w: sideW, h: 14, isMoving });
+          obstacles.push({ x: w - sideW / 2, y, w: sideW, h: 14, isMoving });
+        }
+      }
+
+      return { ballStart, goalPos, obstacles };
+    }
+
+    function loadLevel(levelIdx) {
+      isLevelComplete = false;
+      movingObstacles = [];
+      document.getElementById('win-modal').style.display = 'none';
+      document.getElementById('level-text').innerText = `Livello ${levelIdx + 1}`;
+
+      Composite.clear(engine.world, false);
+
+      const ground = Bodies.rectangle(w / 2, h, w, 24, wallOpt);
+      const ceiling = Bodies.rectangle(w / 2, 0, w, 24, wallOpt);
+      const leftWall = Bodies.rectangle(0, h / 2, 24, h, wallOpt);
+      const rightWall = Bodies.rectangle(w, h / 2, 24, h, wallOpt);
+      Composite.add(engine.world, [ground, ceiling, leftWall, rightWall]);
+
+      const data = generateLevelData(levelIdx);
+
+      goal = Bodies.circle(data.goalPos.x, data.goalPos.y, 24, {
+        isSensor: true,
+        isStatic: true,
+        render: { fillStyle: '#a6e3a1' }
+      });
+
+      ball = Bodies.circle(data.ballStart.x, data.ballStart.y, 16, {
+        restitution: 0.6,
+        friction: 0.05,
+        render: { fillStyle: selectedSkinColor }
+      });
+
+      const obsBodies = data.obstacles.map(o => {
+        const body = Bodies.rectangle(o.x, o.y, o.w, o.h, {
+          isStatic: true,
+          render: { fillStyle: o.isMoving ? '#f9e2af' : '#89b4fa' }
+        });
+        if (o.isMoving) {
+          movingObstacles.push({
+            body: body,
+            initialX: o.x,
+            range: 35 + Math.min(80, levelIdx * 2),
+            speed: 0.02 + Math.min(0.05, levelIdx * 0.002)
+          });
+        }
+        return body;
+      });
+
+      Composite.add(engine.world, [goal, ball, ...obsBodies]);
+    }
+
+    // Animazione Ostacoli e Controllo Traguardo
+    let time = 0;
+    Events.on(engine, 'beforeUpdate', () => {
+      time += 0.05;
+      movingObstacles.forEach(item => {
+        const newX = item.initialX + Math.sin(time * item.speed * 20) * item.range;
+        Body.setPosition(item.body, { x: newX, y: item.body.position.y });
+      });
+
+      if (isLevelComplete || !ball || !goal) return;
+
+      const dist = Vector.magnitude(Vector.sub(ball.position, goal.position));
+      if (dist < 18) {
+        isLevelComplete = true;
+        
+        // Sblocco Skin ogni 30 livelli
+        if ((currentLevel + 1) % 30 === 0) {
+          const skinUnlockedIdx = Math.floor((currentLevel + 1) / 30);
+          document.getElementById('win-title').innerText = 'NUOVA SKIN SBLOCCATA! 🎨';
+          document.getElementById('win-desc').innerText = `Hai superato il livello ${currentLevel + 1} e sbloccato una nuova skin!`;
+        } else {
+          document.getElementById('win-title').innerText = 'Livello Completato! 🎉';
+          document.getElementById('win-desc').innerText = `Ottimo lavoro col livello ${currentLevel + 1}!`;
+        }
+        
+        document.getElementById('win-modal').style.display = 'block';
+      }
+    });
+
+    // Prossimo Livello
+    document.getElementById('next-btn').addEventListener('click', () => {
+      currentLevel++;
+      if (currentLevel > highestLevel) highestLevel = currentLevel;
+      loadLevel(currentLevel);
+    });
+
+    // Gestione Menu Skins
+    const skinModal = document.getElementById('skin-modal');
+    document.getElementById('skins-btn').addEventListener('click', () => {
+      renderSkinList();
+      skinModal.style.display = 'block';
+    });
+
+    document.getElementById('close-skin-btn').addEventListener('click', () => {
+      skinModal.style.display = 'none';
+    });
+
+    function renderSkinList() {
+      const container = document.getElementById('skin-list');
+      container.innerHTML = '';
+      
+      const unlockedCount = 1 + Math.floor(highestLevel / 30);
+
+      SKINS.forEach((skin, idx) => {
+        const circle = document.createElement('div');
+        circle.className = 'skin-circle';
+        
+        if (idx < unlockedCount) {
+          circle.style.backgroundColor = skin.color;
+          if (skin.color === selectedSkinColor) {
+            circle.style.border = '3px solid #a6e3a1';
+          }
+          circle.addEventListener('click', () => {
+            selectedSkinColor = skin.color;
+            if (ball) ball.render.fillStyle = selectedSkinColor;
+            renderSkinList();
+          });
+        } else {
+          circle.className += ' skin-locked';
+          circle.title = `Sblocca al livello ${idx * 30}`;
+        }
+        
+        container.appendChild(circle);
+      });
+    }
+
+    // Giroscopio
+    function handleOrientation(event) {
+      const x = event.gamma || 0;
+      const y = event.beta || 0;
+      engine.gravity.x = Math.max(-1.5, Math.min(1.5, x / 25));
+      engine.gravity.y = Math.max(-1.5, Math.min(1.5, y / 25));
+    }
+
+    window.addEventListener('deviceorientation', handleOrientation);
+
+    loadLevel(0);
+  </script>
+</body>
+</html>
